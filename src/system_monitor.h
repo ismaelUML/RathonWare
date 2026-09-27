@@ -1,43 +1,21 @@
 #pragma once
 
-#ifndef WINVER
-#define WINVER 0x0A00
-#endif
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0A00
-#endif
-#ifndef NTDDI_VERSION
-#define NTDDI_VERSION 0x0A000000
-#endif
-
-// Win32 Header Hell Workaround:
-// If windows.h is included before winsock2.h, it unconditionally includes legacy winsock.h (Winsock 1.1).
-// When iphlpapi.h or ws2tcpip.h is later pulled in, the compiler generates 100+ duplicate symbol errors.
-// WIN32_LEAN_AND_MEAN and explicit winsock2.h inclusion first is mandatory.
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-#include <iphlpapi.h>
-#include <netioapi.h>
-#include <pdh.h>
-#include <psapi.h>
-#include <dxgi1_4.h>
-
 #include <QObject>
 #include <QTimer>
 #include <QString>
+#include <memory>
+#include "usecases/system_usecases.h"
+#include "common/reactive_stream.h"
+#include "common/bounded_executor.h"
 
-// System-wide diagnostic monitor.
-// Aggregates real-time NT kernel stats, PDH disk counters, network interface deltas,
-// and physical memory commit charges into reactive Qt Q_PROPERTY bindings.
+// Reactive Driving Adapter bridging SystemUseCases into Qt Quick / QML.
+// Satisfies Hexagonal Architecture: Contains ZERO Win32 / PDH / DXGI calls.
+// Consumes telemetry events pushed by the background reactive stream and exposes
+// typed Q_PROPERTY bindings to QML delegates.
 class SystemMonitor : public QObject
 {
     Q_OBJECT
-    
+
     // Core monitors
     Q_PROPERTY(double cpuUsage READ cpuUsage NOTIFY cpuUsageChanged)
     Q_PROPERTY(double ramUsage READ ramUsage NOTIFY ramUsageChanged)
@@ -48,7 +26,7 @@ class SystemMonitor : public QObject
     Q_PROPERTY(double gpuVramUsage READ gpuVramUsage NOTIFY gpuVramUsageChanged)
     Q_PROPERTY(double gpuVramTotal READ gpuVramTotal NOTIFY gpuVramTotalChanged)
     Q_PROPERTY(double gpuVramUsed READ gpuVramUsed NOTIFY gpuVramUsedChanged)
-    
+
     // Extended Metrics
     Q_PROPERTY(QString uptime READ uptime NOTIFY uptimeChanged)
     Q_PROPERTY(double diskReadSpeed READ diskReadSpeed NOTIFY diskReadSpeedChanged)
@@ -59,7 +37,7 @@ class SystemMonitor : public QObject
     Q_PROPERTY(QString diskDriveSummary READ diskDriveSummary NOTIFY diskUsageChanged)
     Q_PROPERTY(double netDownloadSpeed READ netDownloadSpeed NOTIFY netDownloadSpeedChanged)
     Q_PROPERTY(double netUploadSpeed READ netUploadSpeed NOTIFY netUploadSpeedChanged)
-    
+
     // Kernel & Memory Commit Metrics
     Q_PROPERTY(double commitTotalGB READ commitTotalGB NOTIFY commitStatsChanged)
     Q_PROPERTY(double commitLimitGB READ commitLimitGB NOTIFY commitStatsChanged)
@@ -81,47 +59,46 @@ class SystemMonitor : public QObject
     Q_PROPERTY(int ramSpeed READ ramSpeed CONSTANT)
 
 public:
-    explicit SystemMonitor(QObject *parent = nullptr);
-    ~SystemMonitor();
+    explicit SystemMonitor(std::shared_ptr<Rathon::UseCases::SystemUseCases> useCases, QObject *parent = nullptr);
+    ~SystemMonitor() override;
 
-    // Getters
-    double cpuUsage() const { return m_cpuUsage; }
-    double ramUsage() const { return m_ramUsage; }
-    double ramTotal() const { return m_ramTotal; }
-    double ramUsed() const { return m_ramUsed; }
-    double gpuUsage() const { return m_gpuUsage; }
-    double gpuTemp() const { return m_gpuTemp; }
-    double gpuVramUsage() const { return m_gpuVramUsage; }
-    double gpuVramTotal() const { return m_gpuVramTotal; }
-    double gpuVramUsed() const { return m_gpuVramUsed; }
-    
-    QString uptime() const { return m_uptime; }
-    double diskReadSpeed() const { return m_diskReadSpeed; }
-    double diskWriteSpeed() const { return m_diskWriteSpeed; }
-    double diskUsage() const { return m_diskUsage; }
-    double diskTotalCapacityGB() const { return m_diskTotalCapacityGB; }
-    double diskTotalFreeGB() const { return m_diskTotalFreeGB; }
-    QString diskDriveSummary() const { return m_diskDriveSummary; }
-    double netDownloadSpeed() const { return m_netDownloadSpeed; }
-    double netUploadSpeed() const { return m_netUploadSpeed; }
+    double cpuUsage() const { return m_snapshot.cpuUsage; }
+    double ramUsage() const { return m_snapshot.ramUsage; }
+    double ramTotal() const { return m_snapshot.ramTotal; }
+    double ramUsed() const { return m_snapshot.ramUsed; }
+    double gpuUsage() const { return m_snapshot.gpuUsage; }
+    double gpuTemp() const { return m_snapshot.gpuTemp; }
+    double gpuVramUsage() const { return m_snapshot.gpuVramUsage; }
+    double gpuVramTotal() const { return m_snapshot.gpuVramTotal; }
+    double gpuVramUsed() const { return m_snapshot.gpuVramUsed; }
 
-    double commitTotalGB() const { return m_commitTotalGB; }
-    double commitLimitGB() const { return m_commitLimitGB; }
-    double commitUsagePercent() const { return m_commitUsagePercent; }
-    double commitPeakGB() const { return m_commitPeakGB; }
-    double kernelPagedMB() const { return m_kernelPagedMB; }
-    double kernelNonpagedMB() const { return m_kernelNonpagedMB; }
-    int processCount() const { return m_processCount; }
-    int threadCount() const { return m_threadCount; }
-    int handleCount() const { return m_handleCount; }
+    QString uptime() const { return QString::fromStdString(m_snapshot.uptime); }
+    double diskReadSpeed() const { return m_snapshot.diskReadSpeed; }
+    double diskWriteSpeed() const { return m_snapshot.diskWriteSpeed; }
+    double diskUsage() const { return m_snapshot.diskUsage; }
+    double diskTotalCapacityGB() const { return m_snapshot.diskTotalCapacityGB; }
+    double diskTotalFreeGB() const { return m_snapshot.diskTotalFreeGB; }
+    QString diskDriveSummary() const { return QString::fromStdString(m_snapshot.diskDriveSummary); }
+    double netDownloadSpeed() const { return m_snapshot.netDownloadSpeed; }
+    double netUploadSpeed() const { return m_snapshot.netUploadSpeed; }
 
-    QString cpuModel() const { return m_cpuModel; }
-    int cpuBaseClockMHz() const { return m_cpuBaseClockMHz; }
-    QString gpuModel() const { return m_gpuModel; }
-    QString gpuBackend() const { return m_gpuBackend; }
-    QString motherboardModel() const { return m_motherboardModel; }
-    QString biosVersion() const { return m_biosVersion; }
-    int ramSpeed() const { return m_ramSpeed; }
+    double commitTotalGB() const { return m_snapshot.commitTotalGB; }
+    double commitLimitGB() const { return m_snapshot.commitLimitGB; }
+    double commitUsagePercent() const { return m_snapshot.commitUsagePercent; }
+    double commitPeakGB() const { return m_snapshot.commitPeakGB; }
+    double kernelPagedMB() const { return m_snapshot.kernelPagedMB; }
+    double kernelNonpagedMB() const { return m_snapshot.kernelNonpagedMB; }
+    int processCount() const { return m_snapshot.processCount; }
+    int threadCount() const { return m_snapshot.threadCount; }
+    int handleCount() const { return m_snapshot.handleCount; }
+
+    QString cpuModel() const { return QString::fromStdString(m_snapshot.cpuModel); }
+    int cpuBaseClockMHz() const { return m_snapshot.cpuBaseClockMHz; }
+    QString gpuModel() const { return QString::fromStdString(m_snapshot.gpuModel); }
+    QString gpuBackend() const { return QString::fromStdString(m_snapshot.gpuBackend); }
+    QString motherboardModel() const { return QString::fromStdString(m_snapshot.motherboardModel); }
+    QString biosVersion() const { return QString::fromStdString(m_snapshot.biosVersion); }
+    int ramSpeed() const { return m_snapshot.ramSpeed; }
 
 signals:
     void cpuUsageChanged();
@@ -133,7 +110,7 @@ signals:
     void gpuVramUsageChanged();
     void gpuVramTotalChanged();
     void gpuVramUsedChanged();
-    
+
     void uptimeChanged();
     void diskReadSpeedChanged();
     void diskWriteSpeedChanged();
@@ -145,95 +122,17 @@ signals:
     void systemCountsChanged();
 
 private slots:
-    void updateStats();
+    void sampleTelemetry();
 
 private:
-    void initCpuQuery();
-    double calculateCpuUsage();
-    
-    void initGpuQuery();
-    void updateGpuStats();
+    void applySnapshot(const Rathon::Domain::SystemSnapshot& snapshot);
 
-    void queryCpuModel();
-    void queryGpuModel();
-    void queryMotherboardAndBios();
-    void queryRamSpeed();
+    std::shared_ptr<Rathon::UseCases::SystemUseCases> m_useCases;
+    std::unique_ptr<Rathon::Common::BoundedExecutor> m_executor;
+    std::shared_ptr<Rathon::Common::ReactiveStream<Rathon::Domain::SystemSnapshot>> m_stream;
+    Rathon::Common::ReactiveStream<Rathon::Domain::SystemSnapshot>::SubscriptionId m_subId = 0;
 
-    // Extended Sensor queries (PDH & IP Helper & Win32)
-    void initPdhQueries();
-    void queryDiskSpeeds();
-    void queryDiskUsage();
-    void queryNetworkSpeeds();
-    void queryPerformanceInfo();
-    void updateUptime();
-
-    // Core values
-    double m_cpuUsage = 0.0;
-    double m_ramUsage = 0.0;
-    double m_ramTotal = 0.0;
-    double m_ramUsed = 0.0;
-    double m_gpuUsage = 0.0;
-    double m_gpuTemp = 0.0;
-    double m_gpuVramUsage = 0.0;
-    double m_gpuVramTotal = 0.0;
-    double m_gpuVramUsed = 0.0;
-    
-    // Extended values
-    QString m_uptime = "00:00:00";
-    double m_diskReadSpeed = 0.0;
-    double m_diskWriteSpeed = 0.0;
-    double m_diskUsage = 0.0;
-    double m_diskTotalCapacityGB = 0.0;
-    double m_diskTotalFreeGB = 0.0;
-    QString m_diskDriveSummary = "";
-    double m_netDownloadSpeed = 0.0;
-    double m_netUploadSpeed = 0.0;
-
-    // Kernel & Commit values
-    double m_commitTotalGB = 0.0;
-    double m_commitLimitGB = 0.0;
-    double m_commitUsagePercent = 0.0;
-    double m_commitPeakGB = 0.0;
-    double m_kernelPagedMB = 0.0;
-    double m_kernelNonpagedMB = 0.0;
-    int m_processCount = 0;
-    int m_threadCount = 0;
-    int m_handleCount = 0;
-
-    // Spec values
-    QString m_cpuModel = "Unknown CPU";
-    int m_cpuBaseClockMHz = 0;
-    QString m_gpuModel = "Unknown GPU";
-    QString m_gpuBackend = "Standard";
-    QString m_motherboardModel = "Unknown Motherboard";
-    QString m_biosVersion = "Unknown BIOS";
-    int m_ramSpeed = 0;
-
+    Rathon::Domain::SystemSnapshot m_snapshot;
     QTimer *m_timer = nullptr;
-
-    // CPU times variables
-    FILETIME m_prevIdleTime;
-    FILETIME m_prevKernelTime;
-    FILETIME m_prevUserTime;
-
-    // NVML Handles
-    HMODULE m_nvmlLib = nullptr;
-    void* m_nvmlDevice = nullptr;
-    bool m_nvmlInitialized = false;
-
-    // DXGI Handles for fallback
-    IDXGIFactory1* m_dxgiFactory = nullptr;
-    IDXGIAdapter3* m_dxgiAdapter3 = nullptr;
-    bool m_dxgiInitialized = false;
-
-    // PDH Handles for Disk speeds
-    PDH_HQUERY m_pdhQuery = nullptr;
-    PDH_HCOUNTER m_counterDiskRead = nullptr;
-    PDH_HCOUNTER m_counterDiskWrite = nullptr;
-    bool m_pdhInitialized = false;
-
-    // Network calculation variables (IP Helper)
-    ULONGLONG m_prevNetInBytes = 0;
-    ULONGLONG m_prevNetOutBytes = 0;
-    ULONGLONG m_lastNetQueryTime = 0;
+    std::atomic<bool> m_isSampling{false};
 };

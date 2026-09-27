@@ -3,31 +3,13 @@
 #include <QObject>
 #include <QAbstractListModel>
 #include <QVector>
+#include <QVariantList>
 #include <QTimer>
-#include <windows.h>
+#include <memory>
+#include "usecases/cpu_usecases.h"
+#include "usecases/process_usecases.h"
+#include "common/bounded_executor.h"
 
-// Individual logical core telemetry entry for the QML Heatmap Grid.
-// Intel 12th-14th Gen processors mix Performance Cores (P-Cores) with Efficiency Cores (E-Cores).
-// Windows Task Manager mixes them all together into tiny indistinct graphs without identifying which is which.
-struct CpuCoreEntry {
-    int coreIndex;
-    QString coreLabel;
-    QString coreType;     // "P-Core", "E-Core", or uniform "Core"
-    bool isPCore;
-    bool isECore;
-    double load;          // Instantaneous per-core load (0.0 - 100.0%)
-    QString heatColor;    // Hex gradient from cool blue (#2b6cb0) to thermal red (#c62828)
-};
-
-// Historical kernel/user time ticks per logical processor
-struct CoreTimeSample {
-    LARGE_INTEGER idleTime;
-    LARGE_INTEGER kernelTime;
-    LARGE_INTEGER userTime;
-};
-
-// List model backing the real-time core heatmap grid in QML.
-// Emits fine-grained updates every 1000ms using low-overhead NT kernel queries.
 class CpuCoreModel : public QAbstractListModel
 {
     Q_OBJECT
@@ -44,16 +26,16 @@ public:
     };
 
     explicit CpuCoreModel(QObject *parent = nullptr);
-    ~CpuCoreModel();
+    ~CpuCoreModel() override = default;
 
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QHash<int, QByteArray> roleNames() const override;
 
-    void updateCores(const QVector<CpuCoreEntry>& cores);
+    void updateCores(std::vector<Rathon::Domain::CpuCoreMetric> cores);
 
 private:
-    QVector<CpuCoreEntry> m_cores;
+    std::vector<Rathon::Domain::CpuCoreMetric> m_cores;
 };
 
 class CpuTopology : public QObject
@@ -68,8 +50,11 @@ class CpuTopology : public QObject
     Q_PROPERTY(double eCoreAvgUsage READ eCoreAvgUsage NOTIFY statsChanged)
 
 public:
-    explicit CpuTopology(CpuCoreModel *coreModel, QObject *parent = nullptr);
-    ~CpuTopology();
+    explicit CpuTopology(std::shared_ptr<Rathon::UseCases::CpuUseCases> cpuUseCases,
+                         std::shared_ptr<Rathon::UseCases::ProcessUseCases> processUseCases,
+                         CpuCoreModel *coreModel,
+                         QObject *parent = nullptr);
+    ~CpuTopology() override;
 
     int totalCores() const { return m_totalCores; }
     int pCoreCount() const { return m_pCoreCount; }
@@ -90,10 +75,10 @@ private slots:
     void updateCoreStats();
 
 private:
-    void initTopology();
-    QString computeHeatColor(double load);
-
+    std::shared_ptr<Rathon::UseCases::CpuUseCases> m_cpuUseCases;
+    std::shared_ptr<Rathon::UseCases::ProcessUseCases> m_processUseCases;
     CpuCoreModel *m_coreModel = nullptr;
+    std::unique_ptr<Rathon::Common::BoundedExecutor> m_executor;
     QTimer *m_timer = nullptr;
 
     int m_totalCores = 0;
@@ -102,11 +87,5 @@ private:
     bool m_hasHybridArchitecture = false;
     double m_pCoreAvgUsage = 0.0;
     double m_eCoreAvgUsage = 0.0;
-
-    DWORD_PTR m_pCoreMask = 0;
-    DWORD_PTR m_eCoreMask = 0;
-    DWORD_PTR m_allCoresMask = 0;
-
-    QVector<bool> m_isPCoreList;
-    QVector<CoreTimeSample> m_prevSamples;
+    std::atomic<bool> m_isUpdating{false};
 };

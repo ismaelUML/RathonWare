@@ -3,12 +3,13 @@
 #include <QAbstractListModel>
 #include <QVector>
 #include <QTimer>
-#include "process_manager.h"
+#include <memory>
+#include "usecases/process_usecases.h"
+#include "common/bounded_executor.h"
 
-// Reactive QAbstractListModel bridging Win32 ProcessManager into Qt Quick / QML.
-// Maps typed C++ fields directly to QML delegates via named roles to avoid JavaScript runtime reflection overhead.
-// Windows process tables have high PID churn (compilers spawning hundreds of cl.exe/gcc processes in seconds);
-// this model manages batch updates cleanly without blocking the QML rendering thread.
+// Reactive QAbstractListModel driving adapter bridging ProcessUseCases into Qt Quick / QML.
+// Employs BoundedExecutor to run low-level PEB traversal asynchronously,
+// ensuring the UI rendering thread never freezes even when compiling with hundreds of processes.
 class ProcessModel : public QAbstractListModel
 {
     Q_OBJECT
@@ -31,14 +32,14 @@ public:
         IsEcoQosRole
     };
 
-    explicit ProcessModel(QObject *parent = nullptr);
-    ~ProcessModel();
+    explicit ProcessModel(std::shared_ptr<Rathon::UseCases::ProcessUseCases> useCases, QObject *parent = nullptr);
+    ~ProcessModel() override;
 
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QHash<int, QByteArray> roleNames() const override;
 
-    bool hasHybridCores() const { return m_manager.hasHybridCores(); }
+    bool hasHybridCores() const;
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE bool killProcess(int pid);
@@ -51,7 +52,11 @@ public:
     Q_INVOKABLE bool resetAffinity(int pid);
 
 private:
-    ProcessManager m_manager;
-    QVector<ProcessInfo> m_processes;
-    QTimer *m_timer;
+    void applyProcessUpdates(std::vector<Rathon::Domain::Process> newProcs);
+
+    std::shared_ptr<Rathon::UseCases::ProcessUseCases> m_useCases;
+    std::unique_ptr<Rathon::Common::BoundedExecutor> m_executor;
+    std::vector<Rathon::Domain::Process> m_processes;
+    QTimer *m_timer = nullptr;
+    std::atomic<bool> m_isRefreshing{false};
 };

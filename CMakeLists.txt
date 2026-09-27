@@ -13,13 +13,44 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
 
 qt_standard_project_setup()
 
-# Source files
+# Hexagonal Core Sources: Domain, Ports, UseCases, Driven Adapters, and Driving Controllers
 set(SOURCES
     src/main.cpp
+    src/common/circuit_breaker.h
+    src/common/bounded_executor.h
+    src/common/ring_buffer.h
+    src/common/cancellation_token.h
+    src/common/reactive_stream.h
+
+    src/domain/entities.h
+    src/domain/process_tree.h
+    src/domain/process_tree.cpp
+
+    src/ports/driven_ports.h
+
+    src/usecases/process_usecases.h
+    src/usecases/process_usecases.cpp
+    src/usecases/system_usecases.h
+    src/usecases/gpu_usecases.h
+    src/usecases/cpu_usecases.h
+    src/usecases/port_usecases.h
+    src/usecases/file_unlocker_usecases.h
+
+    src/adapters/driven/win32/win32_process_adapter.h
+    src/adapters/driven/win32/win32_process_adapter.cpp
+    src/adapters/driven/win32/win32_system_adapter.h
+    src/adapters/driven/win32/win32_system_adapter.cpp
+    src/adapters/driven/win32/win32_gpu_adapter.h
+    src/adapters/driven/win32/win32_gpu_adapter.cpp
+    src/adapters/driven/win32/win32_cpu_adapter.h
+    src/adapters/driven/win32/win32_cpu_adapter.cpp
+    src/adapters/driven/win32/win32_port_adapter.h
+    src/adapters/driven/win32/win32_port_adapter.cpp
+    src/adapters/driven/win32/win32_file_unlocker_adapter.h
+    src/adapters/driven/win32/win32_file_unlocker_adapter.cpp
+
     src/system_monitor.h
     src/system_monitor.cpp
-    src/process_manager.h
-    src/process_manager.cpp
     src/process_model.h
     src/process_model.cpp
     src/port_manager.h
@@ -52,6 +83,8 @@ qt_add_executable(RathonWare
     ${SOURCES}
 )
 
+target_include_directories(RathonWare PRIVATE src)
+
 # Set QML module name
 qt_add_qml_module(RathonWare
     URI RathonWare
@@ -60,6 +93,9 @@ qt_add_qml_module(RathonWare
     RESOURCES
         assets/logo.png
 )
+
+# Requirement 3: Silent Subprocess & Native Windows Subsystem execution
+set_target_properties(RathonWare PROPERTIES WIN32_EXECUTABLE TRUE)
 
 # Windows specific system library linkings.
 # Note: nvml is intentionally NOT linked statically here. It is loaded dynamically at runtime
@@ -80,5 +116,25 @@ target_link_libraries(RathonWare PRIVATE
 if(MSVC)
     target_compile_options(RathonWare PRIVATE /W4)
 else()
-    target_compile_options(RathonWare PRIVATE -Wall -Wextra)
+    target_compile_options(RathonWare PRIVATE -Wall -Wextra -Wno-cast-function-type)
 endif()
+
+# -------------------------------------------------------------
+# Requirement 7: Automated Unit Testing Suite
+# -------------------------------------------------------------
+enable_testing()
+
+add_executable(RathonWareTests
+    tests/test_domain.cpp
+    src/domain/process_tree.cpp
+)
+
+target_include_directories(RathonWareTests PRIVATE src)
+
+if(MSVC)
+    target_compile_options(RathonWareTests PRIVATE /W4)
+else()
+    target_compile_options(RathonWareTests PRIVATE -Wall -Wextra -Wno-cast-function-type)
+endif()
+
+add_test(NAME DomainAndResilienceTests COMMAND RathonWareTests)
