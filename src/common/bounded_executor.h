@@ -106,12 +106,12 @@ private:
     }
 
     const size_t m_maxQueueCapacity;
-    std::vector<std::thread> m_workers;
-    std::queue<std::function<void()>> m_tasks;
     mutable std::mutex m_mutex;
     std::condition_variable m_cv;
-    bool m_stopping;
+    std::queue<std::function<void()>> m_tasks;
+    std::atomic<bool> m_stopping;
     std::atomic<uint64_t> m_rejectedCount;
+    std::vector<std::thread> m_workers;
 };
 
 } // namespace Rathon::Common

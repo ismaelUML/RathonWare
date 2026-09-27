@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <stdexcept>
 
 namespace Rathon::Common {
 

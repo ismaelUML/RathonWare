@@ -1,27 +1,38 @@
 #include <iostream>
-#include <cassert>
 #include <vector>
 #include <thread>
 #include <chrono>
+#include <algorithm>
+#include <cstdlib>
 
 #include "domain/process_tree.h"
 #include "common/circuit_breaker.h"
 #include "common/bounded_executor.h"
 #include "common/ring_buffer.h"
 #include "common/cancellation_token.h"
+#include "common/reactive_stream.h"
 
 using namespace Rathon;
+
+// Release-safe assertion macro that is NEVER compiled out under -DNDEBUG
+#define TEST_ASSERT(cond) \
+    do { \
+        if (!(cond)) { \
+            std::cerr << "Assertion failed: " #cond << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+            std::exit(1); \
+        } \
+    } while (0)
 
 void test_process_tree_resolution() {
     std::cout << "[TEST] Running test_process_tree_resolution..." << std::endl;
 
     // Invariant: Protected PIDs (<= 4) cannot be killed
-    assert(Domain::ProcessTreeResolver::isProtectedPid(0));
-    assert(Domain::ProcessTreeResolver::isProtectedPid(4));
-    assert(!Domain::ProcessTreeResolver::isProtectedPid(100));
+    TEST_ASSERT(Domain::ProcessTreeResolver::isProtectedPid(0));
+    TEST_ASSERT(Domain::ProcessTreeResolver::isProtectedPid(4));
+    TEST_ASSERT(!Domain::ProcessTreeResolver::isProtectedPid(100));
 
     auto emptyOrder = Domain::ProcessTreeResolver::resolveBottomUpKillOrder(4, {});
-    assert(emptyOrder.empty());
+    TEST_ASSERT(emptyOrder.empty());
 
     // Build process tree:
     // Root: 100
@@ -37,15 +48,15 @@ void test_process_tree_resolution() {
 
     // Expected bottom-up order: leaf children first, root last
     // Root (100) must be the very last element in the kill list
-    assert(!killOrder.empty());
-    assert(killOrder.back() == 100);
+    TEST_ASSERT(!killOrder.empty());
+    TEST_ASSERT(killOrder.back() == 100);
 
     // 400 must appear before 300 in kill order
     auto it400 = std::find(killOrder.begin(), killOrder.end(), 400);
     auto it300 = std::find(killOrder.begin(), killOrder.end(), 300);
-    assert(it400 != killOrder.end());
-    assert(it300 != killOrder.end());
-    assert(std::distance(killOrder.begin(), it400) < std::distance(killOrder.begin(), it300));
+    TEST_ASSERT(it400 != killOrder.end());
+    TEST_ASSERT(it300 != killOrder.end());
+    TEST_ASSERT(std::distance(killOrder.begin(), it400) < std::distance(killOrder.begin(), it300));
 
     std::cout << " -> PASSED: Process tree reverse BFS order validated." << std::endl;
 }
@@ -54,24 +65,24 @@ void test_circuit_breaker() {
     std::cout << "[TEST] Running test_circuit_breaker..." << std::endl;
 
     Common::CircuitBreaker cb(3, std::chrono::milliseconds(50));
-    assert(cb.state() == Common::CircuitBreaker::State::Closed);
+    TEST_ASSERT(cb.state() == Common::CircuitBreaker::State::Closed);
 
     // Fail 1 & 2: still Closed
     cb.recordFailure();
     cb.recordFailure();
-    assert(cb.state() == Common::CircuitBreaker::State::Closed);
+    TEST_ASSERT(cb.state() == Common::CircuitBreaker::State::Closed);
 
     // Fail 3: Trips to Open
     cb.recordFailure();
-    assert(cb.state() == Common::CircuitBreaker::State::Open);
+    TEST_ASSERT(cb.state() == Common::CircuitBreaker::State::Open);
 
     // When Open, execute() must immediately divert to fallback
     bool fallbackCalled = false;
     cb.execute(
-        []() { assert(false && "Action should not be called when circuit is Open"); },
+        []() { TEST_ASSERT(false && "Action should not be called when circuit is Open"); },
         [&fallbackCalled]() { fallbackCalled = true; }
     );
-    assert(fallbackCalled);
+    TEST_ASSERT(fallbackCalled);
 
     // Wait for cooldown to expire (50ms)
     std::this_thread::sleep_for(std::chrono::milliseconds(60));
@@ -80,10 +91,10 @@ void test_circuit_breaker() {
     bool probeSucceeded = false;
     cb.execute(
         [&probeSucceeded]() { probeSucceeded = true; },
-        []() { assert(false && "Fallback should not be called if probe succeeds"); }
+        []() { TEST_ASSERT(false && "Fallback should not be called if probe succeeds"); }
     );
-    assert(probeSucceeded);
-    assert(cb.state() == Common::CircuitBreaker::State::Closed);
+    TEST_ASSERT(probeSucceeded);
+    TEST_ASSERT(cb.state() == Common::CircuitBreaker::State::Closed);
 
     std::cout << " -> PASSED: Circuit breaker Closed -> Open -> HalfOpen -> Closed validated." << std::endl;
 }
@@ -94,37 +105,42 @@ void test_bounded_executor_backpressure() {
     // 1 worker, max queue capacity of 2
     Common::BoundedExecutor executor(1, 2);
 
+    std::atomic<bool> workerRunning{false};
     std::atomic<bool> blockWorker{true};
     std::atomic<int> completedTasks{0};
 
     // Task 1: will be picked up and blocked by worker
     bool sub1 = executor.submit([&]() {
+        workerRunning.store(true);
         while (blockWorker.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         completedTasks++;
     });
-    assert(sub1);
+    TEST_ASSERT(sub1);
 
-    // Let the worker pick it up
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // Wait deterministically for worker to dequeue Task 1 and start running it
+    for (int i = 0; i < 200 && !workerRunning.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    TEST_ASSERT(workerRunning.load());
 
     // Now fill queue: Task 2 and Task 3
     bool sub2 = executor.submit([&]() { completedTasks++; });
     bool sub3 = executor.submit([&]() { completedTasks++; });
-    assert(sub2);
-    assert(sub3);
+    TEST_ASSERT(sub2);
+    TEST_ASSERT(sub3);
 
     // Task 4: Queue is now saturated (size >= 2). Must be rejected immediately!
     bool sub4 = executor.submit([&]() { completedTasks++; });
-    assert(!sub4); // BACKPRESSURE REJECTION CONFIRMED
-    assert(executor.rejectedTasksCount() >= 1);
+    TEST_ASSERT(!sub4); // BACKPRESSURE REJECTION CONFIRMED
+    TEST_ASSERT(executor.rejectedTasksCount() >= 1);
 
     // Unblock worker and let tasks complete
     blockWorker.store(false);
     executor.shutdown();
 
-    assert(completedTasks.load() == 3);
+    TEST_ASSERT(completedTasks.load() == 3);
     std::cout << " -> PASSED: Bounded executor backpressure and queue capacity limits validated." << std::endl;
 }
 
@@ -139,15 +155,15 @@ void test_eviction_ring_buffer() {
 
     // Capacity was 5. We pushed 1,2,3,4,5,6,7,8.
     // 1, 2, 3 must have been evicted.
-    assert(buffer.size() == 5);
+    TEST_ASSERT(buffer.size() == 5);
 
     auto vec = buffer.toVector();
-    assert(vec.size() == 5);
-    assert(vec[0] == 4);
-    assert(vec[1] == 5);
-    assert(vec[2] == 6);
-    assert(vec[3] == 7);
-    assert(vec[4] == 8);
+    TEST_ASSERT(vec.size() == 5);
+    TEST_ASSERT(vec[0] == 4);
+    TEST_ASSERT(vec[1] == 5);
+    TEST_ASSERT(vec[2] == 6);
+    TEST_ASSERT(vec[3] == 7);
+    TEST_ASSERT(vec[4] == 8);
 
     std::cout << " -> PASSED: EvictionRingBuffer FIFO memory eviction validated." << std::endl;
 }
@@ -158,9 +174,9 @@ void test_cancellation_token() {
     Common::CancellationSource source;
     auto token = source.token();
 
-    assert(!token.isCancelled());
+    TEST_ASSERT(!token.isCancelled());
     source.cancel();
-    assert(token.isCancelled());
+    TEST_ASSERT(token.isCancelled());
 
     bool threw = false;
     try {
@@ -168,9 +184,29 @@ void test_cancellation_token() {
     } catch (const std::runtime_error&) {
         threw = true;
     }
-    assert(threw);
+    TEST_ASSERT(threw);
 
     std::cout << " -> PASSED: CancellationToken cascade abort validated." << std::endl;
+}
+
+void test_reactive_stream() {
+    std::cout << "[TEST] Running test_reactive_stream..." << std::endl;
+
+    Common::ReactiveStream<int> stream;
+    int received = 0;
+    auto subId = stream.subscribe([&](int val) {
+        received += val;
+    });
+
+    stream.publish(10);
+    stream.publish(20);
+    TEST_ASSERT(received == 30);
+
+    stream.unsubscribe(subId);
+    stream.publish(50); // Should not be received
+    TEST_ASSERT(received == 30);
+
+    std::cout << " -> PASSED: ReactiveStream pub/sub validated." << std::endl;
 }
 
 int main() {
@@ -183,6 +219,7 @@ int main() {
     test_bounded_executor_backpressure();
     test_eviction_ring_buffer();
     test_cancellation_token();
+    test_reactive_stream();
 
     std::cout << "==========================================" << std::endl;
     std::cout << "  ALL UNIT TESTS PASSED SUCCESSFULLY!     " << std::endl;
