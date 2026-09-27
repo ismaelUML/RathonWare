@@ -137,4 +137,8 @@ else()
     target_compile_options(RathonWareTests PRIVATE -Wall -Wextra -Wno-cast-function-type)
 endif()
 
+if(MINGW)
+    target_link_options(RathonWareTests PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
+
 add_test(NAME DomainAndResilienceTests COMMAND RathonWareTests)

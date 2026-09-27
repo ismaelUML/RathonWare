@@ -37,19 +37,41 @@ jobs:
         tools: 'tools_mingw1310'
         cache: true
 
+    - name: Sanitize Runner PATH (Remove Strawberry Perl)
+      run: |
+        # Strip Strawberry Perl from PATH to eliminate ABI collision between Strawberry's GCC and Qt's MinGW
+        $cleanPath = ($env:PATH -split ';' | Where-Object { $_ -notlike '*Strawberry*' }) -join ';'
+        "PATH=$cleanPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      shell: powershell
+
     - name: Configure CMake
       run: |
+        if (Get-Command gcc -ErrorAction SilentlyContinue) {
+            $gccBin = Split-Path (Get-Command gcc).Source
+            $env:PATH = "$gccBin;$env:PATH"
+        }
         cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
       shell: powershell
 
     - name: Compile Application & Unit Test Suite
       run: |
+        if (Get-Command gcc -ErrorAction SilentlyContinue) {
+            $gccBin = Split-Path (Get-Command gcc).Source
+            $env:PATH = "$gccBin;$env:PATH"
+        }
         cmake --build build --config Release
       shell: powershell
 
     - name: Run Automated Unit Tests (CTest)
       run: |
-        ctest --test-dir build --output-on-failure
+        if (Get-Command gcc -ErrorAction SilentlyContinue) {
+            $gccBin = Split-Path (Get-Command gcc).Source
+            $env:PATH = "$gccBin;$env:PATH"
+        }
+        if (Test-Path "$env:Qt6_DIR\bin") {
+            $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
+        }
+        ctest --test-dir build --output-on-failure --verbose
       shell: powershell
 
     - name: Cyclomatic Complexity Audit
