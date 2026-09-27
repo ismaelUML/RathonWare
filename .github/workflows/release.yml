@@ -22,14 +22,20 @@ jobs:
         choco install innosetup --no-progress
       shell: powershell
 
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
     - name: Install Qt 6 (MinGW 64-bit)
-      uses: jurplel/install-qt-action@v3
+      uses: jurplel/install-qt-action@v4
       with:
         version: '6.6.3'
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
-        tools: 'tools_mingw1120'
+        tools: 'tools_mingw1310'
+        cache: true
 
     - name: Configure CMake
       run: |
