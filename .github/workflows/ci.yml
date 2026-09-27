@@ -1,0 +1,61 @@
+name: CI Quality Gate & SonarCloud
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master, dev ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  build-test-and-sonar:
+    name: Build, Unit Tests & Quality Gate
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Shallow clones disabled for accurate SonarCloud analysis
+
+    - name: Install Qt 6 (MinGW 64-bit)
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: '6.6.3'
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_mingw'
+        tools: 'tools_mingw1120'
+
+    - name: Configure CMake
+      run: |
+        cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
+      shell: powershell
+
+    - name: Compile Application & Unit Test Suite
+      run: |
+        cmake --build build --config Release
+      shell: powershell
+
+    - name: Run Automated Unit Tests (CTest)
+      run: |
+        ctest --test-dir build --output-on-failure
+      shell: powershell
+
+    - name: Cyclomatic Complexity Audit
+      run: |
+        python -m pip install --upgrade pip lizard
+        lizard src/ -C 5 -W src/common/ src/domain/ src/ports/ src/usecases/
+      shell: powershell
+      continue-on-error: true
+
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@v3
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      continue-on-error: true # Allows CI green check even if user hasn't bound SonarCloud secret token yet

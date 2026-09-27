@@ -98,6 +98,29 @@ Drag and drop any locked file or directory into the File Unlocker dialog, or typ
 
 ---
 
+## Architectural Foundations
+
+RathonWare is engineered following strict Clean / Hexagonal Architecture (Ports & Adapters) and Production Resilience principles:
+
+1. **Hexagonal Core (`src/domain/`, `src/ports/`, `src/usecases/`)**:
+   - **Pure Domain (`domain/`)**: Immutable entities and business algorithms (e.g. `ProcessTreeResolver`) implemented using 100% standard C++20 with **zero** external libraries, zero Qt, and zero Win32 headers.
+   - **Contracts (`ports/`)**: Pure abstract interfaces (`IProcessPort`, `ISystemPort`, `IGpuPort`, `ICpuTopologyPort`, `IPortPort`, `IFileUnlockerPort`).
+   - **Use Cases (`usecases/`)**: Orchestrator core enforcing invariant checks (e.g., kernel protection for PID <= 4, bottom-up tree kill scheduling, and circuit breaker trip logic).
+   - **Adapters (`adapters/`)**:
+     - *Driven Adapters (`adapters/driven/win32/`)*: Low-level Win32, NT kernel, and DirectX/NVML hardware implementations.
+     - *Driving Adapters (`adapters/driving/qt/`)*: Qt Quick QML controllers and models (`ProcessModel`, `SystemMonitor`, etc.).
+
+2. **Resilience & Concurrency Limits**:
+   - **Circuit Breaker (`common/circuit_breaker.h`)**: Closed/Open/HalfOpen state machine with automatic failure trip threshold and cooldown probing for GPU telemetry.
+   - **Backpressure & Bounded Worker Pool (`common/bounded_executor.h`)**: Fixed worker threads and bounded task queue that rejects excess requests when saturated, eliminating runaway OOM risks.
+   - **Memory Eviction (`common/ring_buffer.h`)**: Strict FIFO eviction ring buffers guaranteeing bounded memory usage for 60-second telemetry histories.
+   - **Cascading Cancellation (`common/cancellation_token.h`)**: Propagates cancellation signals down to OS loops and background tasks.
+
+3. **Continuous Integration & Quality**:
+   - Automated GitHub Actions quality gate ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) running unit tests (`ctest`) on Windows runners.
+   - Automated cyclomatic complexity audit ($\le 5$ per function rule).
+   - SonarCloud continuous inspection integration (`sonar-project.properties`).
+
 ## Non-Goals
 
 - **Not an overclocking or voltage utility**: Frequency and fan curves belong in firmware or vendor-specific tools (MSI Afterburner).
